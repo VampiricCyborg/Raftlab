@@ -8,7 +8,7 @@ expected output. Deviations from the brief and unfinished items are listed
 explicitly in §4 and §5. **Treat every claim here as unverified until you
 check it against the code or by running the listed commands.**
 
-- Repository: `https://github.com/VampiricCyborg/RaftLab` (branch `main`)
+- Repository: `https://github.com/VampiricCyborg/Raftlab` (branch `main`)
 - Local path: `C:\Users\Madhav\PROJECTS\learning\RaftLab`
 - Environment used: Windows 11, Python 3.13.1, uv 0.9.8, pytest 9.1.1, hypothesis 6.168.0
 - Size: about 2,800 lines across `src/`, `tests/`, `benchmarks/` and `demo.py`
@@ -347,7 +347,7 @@ cut-order list was cut.
 | `python demo.py` reproduces the transcript byte-for-byte from a fixed seed | DONE | `test_readme_transcript_matches_demo_byte_for_byte`, `test_demo_is_deterministic` |
 | README explains all five safety properties "in your own words" | DONE (deviation) | written by Claude, not by the user (§4) |
 | Non-goals section written | DONE | README |
-| Repo pushed to `VampiricCyborg/raftlab`, description set, topics tagged | **PARTIAL** | pushed to `VampiricCyborg/RaftLab` (capitalization kept deliberately, §5); **description and topics NOT set**, because `gh` is not authenticated (§5) |
+| Repo pushed to `VampiricCyborg/raftlab`, description set, topics tagged | DONE | pushed to `VampiricCyborg/Raftlab` (capitalization kept deliberately, §5); description set; topics: raft, consensus, distributed-systems, python, simulation, fault-injection, property-based-testing. Check with `gh repo view VampiricCyborg/Raftlab` |
 
 ### 3.16 Brief §14: risk mitigations
 
@@ -414,16 +414,13 @@ that code cannot verify (§4).
 
 ## 5. Not done / open items
 
-1. **GitHub description and topics are not set.** This requires
-   `gh auth login` and then, for example,
-   `gh repo edit VampiricCyborg/RaftLab --description "..." --add-topic raft,consensus,distributed-systems,python,simulation`.
-2. **Repository name capitalization (decided, not a defect).** The brief says
-   `raftlab`; the repo is `RaftLab`. The owner chose to keep it. GitHub URLs
+1. **Repository name capitalization (decided, not a defect).** The brief says
+   `raftlab`; the repo is `Raftlab`. The owner chose to keep it. GitHub URLs
    are case-insensitive and the Python package is `raftlab` either way.
-3. **The mutation-testing script is not in the repo.** It lived in a temporary
+2. **The mutation-testing script is not in the repo.** It lived in a temporary
    directory. §6 describes each mutation precisely so it can be reproduced by
    hand.
-4. **Not tested on Python 3.11 or 3.12**, and not tested on Linux or macOS.
+3. **Not tested on Python 3.11 or 3.12**, and not tested on Linux or macOS.
 
 ---
 
