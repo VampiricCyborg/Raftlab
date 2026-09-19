@@ -18,6 +18,7 @@ import random
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from raftlab.invariants import InvariantChecker
 from raftlab.messages import Message
 from raftlab.node import Outbound, RaftConfig, RaftNode, Role
 from raftlab.transport import Network
@@ -42,7 +43,7 @@ class Cluster:
         n: int = 3,
         seed: int = 0,
         config: RaftConfig | None = None,
-        checkers: Iterable[Checker] = (),
+        checkers: Iterable[Checker] | None = None,
         trace_messages: bool = True,
     ) -> None:
         self.seed = seed
@@ -57,7 +58,10 @@ class Cluster:
             for i in self.node_ids
         }
         self.crashed: set[int] = set()
-        self.checkers: list[Checker] = list(checkers)
+        # Invariants are on unless a caller (e.g. a benchmark) opts out explicitly.
+        self.checkers: list[Checker] = (
+            [InvariantChecker()] if checkers is None else list(checkers)
+        )
         self.trace_messages = trace_messages
         self.trace: list[TraceEvent] = []
 
