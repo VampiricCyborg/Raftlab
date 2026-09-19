@@ -137,10 +137,9 @@ class RaftNode:
         Every message passes through the two term rules first, so by the time
         a handler below runs, ``msg.term == self.current_term`` is guaranteed.
         """
-        old_term = self.current_term
+        if msg.term > self.current_term:
+            self._emit(f"saw term {msg.term} > term {self.current_term}, adopts it")
         self._step_down_if_newer_term(msg.term, now)  # R1
-        if self.current_term != old_term:
-            self._emit(f"saw term {self.current_term} > term {old_term}, adopts it")
 
         rejection = self._reject_stale(msg)  # R2
         if rejection is not None:
