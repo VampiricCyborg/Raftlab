@@ -5,6 +5,7 @@ import pytest
 from helpers import commit, stable_leader
 from raftlab import Cluster, LogEntry, RaftNode, Role
 from raftlab.invariants import InvariantViolation
+from raftlab.messages import RequestVoteReq
 
 
 def set_state(node: RaftNode, term: int, voted_for: int | None, entries: list[LogEntry]) -> None:
@@ -104,6 +105,27 @@ def test_figure8_without_r6_term_check_loses_a_committed_entry(monkeypatch):
     with pytest.raises(InvariantViolation, match="I4 leader completeness"):
         play_figure8(cluster)
     assert (2, "SET x=2") in cluster.nodes[0].state_machine.history
+
+
+def test_restarted_node_does_not_vote_twice_in_one_term():
+    """voted_for is persistent state. If a crash wiped it, a node could vote
+    for A, restart, then vote for B in the same term, and A and B could both
+    reach a majority (I1)."""
+    cluster = Cluster(n=3, seed=0)
+    voter = cluster.nodes[0]
+    for i in (1, 2):
+        cluster.nodes[i].election_deadline = 1  # 1 and 2 stand in the same term
+    voter.election_deadline = 10_000
+    cluster.network.delay(1, 1)
+    cluster.partition({0, 1}, {2})  # the voter hears node1 first...
+    cluster.run(2)
+    assert voter.voted_for == 1 and voter.current_term == 1
+
+    cluster.crash(0)
+    cluster.restart(0)
+    cluster.heal()
+    replies = voter.handle(2, RequestVoteReq(term=1, candidate_id=2, last_log_index=0, last_log_term=0), cluster.now)
+    assert [r.vote_granted for _, r in replies] == [False]  # ...and must not vote for node2 too
 
 
 @pytest.mark.parametrize("seed", range(10))

@@ -49,6 +49,10 @@ class RaftConfig:
     # Must be comfortably below election_timeout_min, or followers will time
     # out between heartbeats of a perfectly healthy leader.
     heartbeat_interval: int = 3
+    # Cap on entries per AppendEntries. Real implementations batch; here it
+    # also means a message can cover less than the leader has committed,
+    # which is exactly the case R7's cap exists for.
+    max_entries_per_message: int = 8
 
 
 class RaftNode:
@@ -341,14 +345,16 @@ class RaftNode:
 
         An empty ``entries`` tuple is a heartbeat. Unacknowledged entries are
         simply re-sent on every heartbeat, which doubles as retransmission.
+        At most ``max_entries_per_message`` entries go in one message.
         """
         prev = self.next_index[peer] - 1
+        batch = self.log.entries_from(prev + 1)[: self.config.max_entries_per_message]
         return AppendEntriesReq(
             term=self.current_term,
             leader_id=self.id,
             prev_log_index=prev,
             prev_log_term=self.log.term_at(prev),
-            entries=self.log.entries_from(prev + 1),
+            entries=batch,
             leader_commit=self.commit_index,
         )
 
@@ -362,6 +368,8 @@ class RaftNode:
             self.match_index[src] = max(self.match_index[src], msg.match_index)
             self.next_index[src] = max(self.next_index[src], self.match_index[src] + 1)
             self._advance_commit_index()
+            if self.next_index[src] <= self.log.last_index:
+                return [(src, self._append_entries_for(src))]  # next batch, no waiting
             return []
         # Consistency check failed (R4). Jump back to the follower's hint, but
         # never below what we already know it holds, then retry right away.
