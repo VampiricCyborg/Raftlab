@@ -8,6 +8,8 @@ dependencies = []
 
 [dependency-groups]
 dev = ["pytest>=8", "hypothesis>=6"]
+# Only for regenerating the README visuals (tools/). The core stays stdlib-only.
+docs = ["pillow>=10.1", "matplotlib>=3.8"]
 
 [build-system]
 requires = ["hatchling"]

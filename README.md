@@ -1,5 +1,20 @@
 # RaftLab
 
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2a78d6)
+![Core: stdlib only](https://img.shields.io/badge/core-stdlib%20only-1baf7a)
+![Tests: 388 passing](https://img.shields.io/badge/tests-388%20passing-0ca30c)
+![Safety: I1–I5 every step](https://img.shields.io/badge/safety-I1%E2%80%93I5%20checked%20every%20step-eb6834)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/demo-dark.gif">
+  <img alt="Animated run of the demo: node2 leads, is partitioned away and keeps believing it is leader while node0 is elected in term 2 and commits x=99; node2's write x=42 never commits; after the partition heals node2 steps down and x=42 is discarded." src="docs/media/demo-light.gif">
+</picture>
+
+*The actual simulator, frame by frame: a leader is cut off, a new one is
+elected, the stale leader's write never commits and is erased on heal. Every
+frame is a real snapshot of the cluster, and the five safety invariants are
+checked after every step.*
+
 A from-scratch implementation of the **Raft consensus algorithm** (leader
 election, log replication, and the safety rules), running as a deterministic
 simulated cluster inside a single process. The simulated network can drop,
@@ -17,6 +32,48 @@ uv run pytest                              # 388 tests (64 functions), ~15 s
 uv run python demo.py                      # the transcript below
 uv run python -m raftlab.chaos --seed 17   # one chaos run, replayable by seed
 uv run python benchmarks/bench_election.py # (also bench_commit, bench_availability)
+
+uv sync --group docs                       # optional: regenerate the GIFs and charts
+uv run python tools/render_gifs.py
+uv run python tools/render_charts.py
+```
+
+## Raft in two pictures
+
+Every node is one of three roles, and terms only move forward:
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Follower
+    Follower --> Candidate: election timeout (random 10–20 ticks)
+    Candidate --> Candidate: split vote, time out again (term + 1)
+    Candidate --> Leader: votes from a majority
+    Candidate --> Follower: hears a current leader or a higher term (R1)
+    Leader --> Follower: sees a higher term (R1)
+```
+
+A client write is only committed once a majority holds it, and only a
+current-term entry is committed by counting (R6):
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant L as Leader (term 2)
+    participant F1 as Follower 1
+    participant F2 as Follower 2
+    C->>L: SET x=99
+    Note over L: append at index 2 (not committed)
+    par replicate
+        L->>F1: AppendEntries(prev=1/t1, [x=99])
+        L->>F2: AppendEntries(prev=1/t1, [x=99])
+    end
+    F1-->>L: success, match=2 (R4 and R5 passed)
+    Note over L: 2 of 3 hold index 2, term 2 = current term, so commit (R6)
+    L->>L: apply x=99
+    L->>F1: heartbeat, leader_commit=2
+    Note over F1: commit_index = min(2, last new) (R7), apply x=99
+    F2-->>L: success, match=2 (late, still fine)
 ```
 
 ## Split brain in fourteen lines
@@ -214,6 +271,16 @@ client writes sent to *any* node claiming leadership, stale ones included),
 plus a derandomized Hypothesis test that generates fault schedules. After the
 chaos, each fuzz run heals everything and asserts the cluster converges.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/chaos-dark.gif">
+  <img alt="Animated chaos run (seed 47, 30% message loss): links are cut and restored, nodes crash and restart, leaders change across ten terms, stale uncommitted entries are truncated, and at the end every node holds the same log while I1–I5 held on every step." src="docs/media/chaos-light.gif">
+</picture>
+
+*One of the 200 fuzz seeds (`python -m raftlab.chaos --seed 47 --trace`):
+30% of messages lost, links cut (red ✗), nodes isolated and crashed, ten
+terms of leadership churn. Outlined log entries are not committed yet, and
+some are later truncated. At the end, every log is identical.*
+
 To check that the tests would catch real mistakes, each rule was broken in
 turn and the suite re-run:
 
@@ -242,6 +309,11 @@ seeded and reproducible (`uv run python benchmarks/<script>.py`).
 **1. Election latency vs timeout jitter** (5 nodes, 100 seeds, cold start,
 `bench_election.py`)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/bench-election-dark.png">
+  <img alt="Left: share of runs with a split vote falls from 100% with no jitter to 23%, 8%, 1% and then 0% as jitter grows. Right: median ticks to elect a leader rises slowly from 12 to 17 as jitter widens; p95 dips to 14 at jitter 5 and climbs to 29 at jitter 40." src="docs/media/bench-election-light.png">
+</picture>
+
 | timeout window | median ticks | p95 ticks | max ticks | mean terms | had split vote | no leader in 2000 |
 |---:|---:|---:|---:|---:|---:|---:|
 | [10, 10] | n/a | n/a | n/a | n/a | 100% | 100% |
@@ -260,6 +332,11 @@ latency. The default [10, 20] sits at the bottom of that curve.
 **2. Time-to-commit vs message drop rate** (5 nodes, delay 1–3 ticks,
 100 seeds × 20 sequential commands, retrying client, `bench_commit.py`)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/bench-commit-dark.png">
+  <img alt="Left: median and p95 ticks to commit stay between 3 and 7 from 0% to 30% loss, while the max jumps from 7 to 55 at 30%. Right: leader elections per 1000 ticks are 0 up to 15% loss and 3.7 at 30%." src="docs/media/bench-commit-light.png">
+</picture>
+
 | drop rate | median ticks | p95 ticks | max ticks | elections / 1000 ticks | gave up (>1000 ticks) |
 |---:|---:|---:|---:|---:|---:|
 | 0% | 3 | 4 | 5 | 0.0 | 0 |
@@ -275,6 +352,11 @@ long tail.
 
 **3. Availability vs cluster size** (50 seeds × 3000 ticks; every K ticks the
 last victim restarts and a random node is killed, `bench_availability.py`)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/bench-availability-dark.png">
+  <img alt="Share of ticks with a stable leader rises with cluster size for every kill interval: killing every 50 ticks gives 85.7% at 3 nodes, 92.6% at 5 and 95.7% at 7; every 100 ticks 92.6%, 96.5%, 97.5%; every 200 ticks 96.5%, 98.4%, 98.8%." src="docs/media/bench-availability-light.png">
+</picture>
 
 | kill every K ticks | nodes | ticks with stable leader | kills that hit the leader | median outage (ticks) |
 |---:|---:|---:|---:|---:|
@@ -341,7 +423,9 @@ src/raftlab/
 tests/             unit tests per rule, cluster scenarios, safety, fuzz, demo
 benchmarks/        the three tables above
 demo.py            the transcript above
-documentation/     project brief and a Raft primer
+tools/             renders the README GIFs and charts from real runs (uv sync --group docs)
+docs/media/        the rendered GIFs and charts, light and dark
+documentation/     project brief, Raft primer, implementation report
 ```
 
 ## References

@@ -74,8 +74,16 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def run_demo(seed: int, out) -> None:
+def run_demo(seed: int, out, observers=()) -> None:
+    """Run the scripted scenario, narrating to ``out``.
+
+    ``observers`` are called with the cluster at t=0 and after every step
+    (tools/render_gifs.py uses this to record frames).
+    """
     cluster = Cluster(n=5, seed=seed)
+    for observe in observers:
+        observe(cluster)
+    cluster.checkers.extend(observers)
     narrate = Narrator(cluster, out)
     narrate.say("cluster of 5 started, all followers")
 

@@ -1,8 +1,30 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments and local config
+.venv/
+venv/
+.env
+
+# Test, coverage and tool caches
 .pytest_cache/
 .hypothesis/
-*.egg-info/
-dist/
-build/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs and scratch output
+*.log

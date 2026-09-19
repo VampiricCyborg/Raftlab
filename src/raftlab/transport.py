@@ -135,3 +135,11 @@ class Network:
     @property
     def in_flight(self) -> int:
         return len(self._queue)
+
+    def pending(self) -> list[Envelope]:
+        """Messages still in flight, in delivery order (read-only view for visualizers)."""
+        return [env for _, _, env in sorted(self._queue, key=lambda item: item[:2])]
+
+    @property
+    def blocked_links(self) -> frozenset[tuple[int, int]]:
+        return frozenset(self._blocked)

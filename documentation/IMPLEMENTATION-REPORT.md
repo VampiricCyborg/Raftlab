@@ -138,7 +138,7 @@ explained in §4, **NOT DONE**.
 | Requirement | Status | Evidence |
 |---|---|---|
 | Python 3.11+ | DONE (deviation) | `requires-python = ">=3.11"`, but only run on 3.13.1 (§4) |
-| Core is stdlib only (`dataclasses`, `enum`, `random`, `heapq`) | DONE | §1 check 5; also uses `collections`, `typing`, `argparse`, `sys` |
+| Core is stdlib only (`dataclasses`, `enum`, `random`, `heapq`) | DONE | §1 check 5; also uses `collections`, `typing`, `argparse`, `sys`. Pillow and matplotlib are only in the optional `docs` group, used by `tools/` to render README visuals |
 | Tests: pytest + hypothesis property tests | DONE | `tests/`; Hypothesis in `test_fuzz.py::test_arbitrary_fault_schedules_preserve_invariants` (`derandomize=True`, 60 examples) |
 | Nothing async; single-threaded discrete-event loop with a logical clock | DONE | `Cluster.step`; §1 check 4 |
 
@@ -157,7 +157,7 @@ explained in §4, **NOT DONE**.
 | `tests/test_{election,replication,partition,safety,fuzz}.py` | DONE | all present |
 | `benchmarks/bench_election.py`, `bench_commit.py` | DONE | present |
 | `demo.py`, `README.md`, `pyproject.toml` | DONE | present |
-| (extra) | n/a | `src/raftlab/chaos.py`, `src/raftlab/client.py`, `tests/helpers.py`, `tests/test_rules_election.py`, `tests/test_rules_replication.py`, `tests/test_simulator.py`, `tests/test_demo.py`, `benchmarks/bench_availability.py`, `benchmarks/_common.py`, `documentation/raft-primer.md`, `uv.lock`, `.gitignore` |
+| (extra) | n/a | `tools/render_gifs.py`, `tools/render_charts.py` and their output in `docs/media/` (README GIFs and charts; need the optional `docs` dependency group: Pillow, matplotlib), `src/raftlab/chaos.py`, `src/raftlab/client.py`, `tests/helpers.py`, `tests/test_rules_election.py`, `tests/test_rules_replication.py`, `tests/test_simulator.py`, `tests/test_demo.py`, `benchmarks/bench_availability.py`, `benchmarks/_common.py`, `documentation/raft-primer.md`, `uv.lock`, `.gitignore` |
 | Top-level folder named `raftlab/` | DONE (deviation) | the repo root *is* the project folder (`RaftLab/`), with no nested `raftlab/` directory |
 
 ### 3.6 Brief §7.1: messages
