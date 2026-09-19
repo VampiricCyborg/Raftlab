@@ -102,6 +102,34 @@ class Cluster:
         for dst, msg in out:
             self.network.send(node_id, dst, msg, self.now)
 
+    # --- clients -----------------------------------------------------------
+
+    def submit(self, command: str, node_id: int | None = None) -> tuple[int, int] | None:
+        """Hand a client command to a leader; returns (leader_id, log_index).
+
+        Without ``node_id``, picks the live leader with the highest term (the
+        one a real client would eventually be redirected to). Returns None if
+        there is no leader. Acceptance is not commitment: poll ``is_committed``.
+        """
+        if node_id is None:
+            leaders = sorted(self.leaders(), key=lambda n: n.current_term)
+            if not leaders:
+                return None
+            node_id = leaders[-1].id
+        if node_id in self.crashed:
+            raise ValueError(f"node{node_id} is crashed")
+        self._record(None, f"client: {command} -> node{node_id}")
+        index, out = self.nodes[node_id].propose(command, self.now)
+        self._after_node_call(node_id, out)
+        return node_id, index
+
+    def is_committed(self, index: int, command: str) -> bool:
+        """True if some live node has committed ``command`` at ``index``."""
+        for node in self.live_nodes():
+            if node.commit_index >= index and node.log.entry(index).command == command:
+                return True
+        return False
+
     # --- fault injection ---------------------------------------------------
 
     def crash(self, node_id: int) -> None:
@@ -139,6 +167,14 @@ class Cluster:
     def leaders(self) -> list[RaftNode]:
         """Live nodes that currently *believe* they are leader (can be >1)."""
         return [n for n in self.live_nodes() if n.role is Role.LEADER]
+
+    def converged(self) -> bool:
+        """All live nodes hold identical logs, fully committed and applied."""
+        nodes = self.live_nodes()
+        first = nodes[0].log.entries()
+        return all(
+            n.log.entries() == first and n.last_applied == len(first) for n in nodes
+        )
 
     def _record(self, node_id: int | None, text: str) -> None:
         self.trace.append(TraceEvent(self.now, node_id, text))

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
 
-from raftlab.log import RaftLog
+from raftlab.log import LogEntry, RaftLog
 from raftlab.messages import (
     AppendEntriesReq,
     AppendEntriesResp,
@@ -28,6 +28,10 @@ from raftlab.messages import (
 from raftlab.statemachine import KVStateMachine
 
 Outbound = tuple[int, Message]
+
+
+class NotLeader(Exception):
+    pass
 
 
 class Role(Enum):
@@ -311,14 +315,33 @@ class RaftNode:
             return self._become_leader(now)
         return []
 
-    # --- replication (heartbeats in Block 2, entries in Block 3) -----------
+    # --- client entry point ------------------------------------------------
+
+    def propose(self, command: str, now: int) -> tuple[int, list[Outbound]]:
+        """Leader only: append a client command and start replicating it.
+
+        Returns the entry's log index plus the AppendEntries to send. The
+        entry is *not* committed yet; that happens once R6 is satisfied.
+        """
+        if self.role is not Role.LEADER:
+            raise NotLeader(f"node{self.id} is {self.role.value}, leader is {self.leader_id}")
+        index = self.log.append(LogEntry(self.current_term, command))
+        self._emit(f"accepts {command!r} at index {index}, term {self.current_term}")
+        self._advance_commit_index()  # a single-node cluster commits alone
+        return index, self._send_heartbeats(now)
+
+    # --- replication, leader side (paper §5.3) -----------------------------
 
     def _send_heartbeats(self, now: int) -> list[Outbound]:
         self.heartbeat_due = now + self.config.heartbeat_interval
         return [(peer, self._append_entries_for(peer)) for peer in self.peers]
 
     def _append_entries_for(self, peer: int) -> AppendEntriesReq:
-        """Everything ``peer`` is believed to be missing, anchored at next_index - 1."""
+        """Everything ``peer`` is believed to be missing, anchored at next_index - 1.
+
+        An empty ``entries`` tuple is a heartbeat. Unacknowledged entries are
+        simply re-sent on every heartbeat, which doubles as retransmission.
+        """
         prev = self.next_index[peer] - 1
         return AppendEntriesReq(
             term=self.current_term,
@@ -328,6 +351,48 @@ class RaftNode:
             entries=self.log.entries_from(prev + 1),
             leader_commit=self.commit_index,
         )
+
+    def _handle_append_entries_resp(
+        self, src: int, msg: AppendEntriesResp, now: int
+    ) -> list[Outbound]:
+        if self.role is not Role.LEADER:
+            return []  # a late reply to a leadership we no longer hold
+        if msg.success:
+            # Replies can arrive reordered or duplicated: never move backwards.
+            self.match_index[src] = max(self.match_index[src], msg.match_index)
+            self.next_index[src] = max(self.next_index[src], self.match_index[src] + 1)
+            self._advance_commit_index()
+            return []
+        # Consistency check failed (R4). Jump back to the follower's hint, but
+        # never below what we already know it holds, then retry right away.
+        self.next_index[src] = max(
+            self.match_index[src] + 1,
+            min(self.next_index[src] - 1, msg.match_index + 1),
+        )
+        return [(src, self._append_entries_for(src))]
+
+    def _advance_commit_index(self) -> None:
+        """R6: commit N only if a majority has ``match_index >= N`` **and**
+        ``log[N].term == current_term``.
+
+        The term check is the Figure 8 rule (primer §6): an entry from an
+        earlier term can sit on a majority and still be overwritten later, so
+        counting replicas alone proves nothing about it. Earlier-term entries
+        become committed indirectly, when a current-term entry after them
+        commits (by Log Matching, everything before it is identical on that
+        majority).
+        """
+        for n in range(self.log.last_index, self.commit_index, -1):
+            if self.log.term_at(n) != self.current_term:
+                break  # terms only decrease going backwards: nothing below qualifies
+            replicas = 1 + sum(1 for p in self.peers if self.match_index[p] >= n)
+            if replicas >= self.majority:
+                self.commit_index = n
+                self._emit(f"commits index {n} (term {self.current_term}, {replicas} replicas)")
+                self._apply_committed()
+                return
+
+    # --- replication, follower side (paper §5.3) ---------------------------
 
     def _handle_append_entries(
         self, src: int, msg: AppendEntriesReq, now: int
@@ -340,13 +405,78 @@ class RaftNode:
             self._become_follower(now)  # someone already won this term
         self.leader_id = msg.leader_id
         self.reset_election_timer(now)
-        # TODO(block 3): R4 consistency check, R5 truncate + append, R7 commit.
-        return [(src, AppendEntriesResp(term=self.current_term, success=False, match_index=0))]
 
-    def _handle_append_entries_resp(
-        self, src: int, msg: AppendEntriesResp, now: int
-    ) -> list[Outbound]:
-        return []  # TODO(block 3)
+        if not self._log_matches(msg.prev_log_index, msg.prev_log_term):  # R4
+            hint = self._conflict_hint(msg.prev_log_index)
+            return [(src, AppendEntriesResp(self.current_term, success=False, match_index=hint))]
+
+        last_new = self._append_new_entries(msg.prev_log_index, msg.entries)  # R5
+        self._follow_leader_commit(msg.leader_commit, last_new)  # R7
+        return [(src, AppendEntriesResp(self.current_term, success=True, match_index=last_new))]
+
+    def _log_matches(self, prev_log_index: int, prev_log_term: int) -> bool:
+        """R4: succeed only if we hold an entry at prev_log_index with prev_log_term.
+
+        By Log Matching (I3), agreeing on that single entry means agreeing on
+        the entire prefix before it, so one comparison checks the whole log.
+        """
+        return self.log.term_at(prev_log_index) == prev_log_term
+
+    def _conflict_hint(self, prev_log_index: int) -> int:
+        """Where the leader should retry from after an R4 failure.
+
+        If our log is too short, retry just after our last entry. If it has
+        the wrong term at prev_log_index, skip back over that whole term in
+        one step instead of one index per round trip (paper §5.3, end). The
+        hint only affects speed: the leader's retry is re-checked by R4.
+        """
+        conflict_term = self.log.term_at(prev_log_index)
+        if conflict_term is None:
+            return self.log.last_index
+        i = prev_log_index
+        while i > 1 and self.log.term_at(i - 1) == conflict_term:
+            i -= 1
+        return i - 1
+
+    def _append_new_entries(self, prev_log_index: int, entries: tuple[LogEntry, ...]) -> int:
+        """R5: on conflict, delete the conflicting entry and all after it, then append.
+
+        Returns the index of the last entry covered by this message.
+
+        Only an entry with the *same index but a different term* is a
+        conflict. An entry with the same index and term is the same entry (by
+        Log Matching) and is kept. This matters: a delayed, reordered
+        AppendEntries carrying a shorter prefix must not truncate entries a
+        later message already delivered.
+        """
+        index = prev_log_index
+        for entry in entries:
+            index += 1
+            existing = self.log.term_at(index)
+            if existing == entry.term:
+                continue
+            if existing is not None:
+                dropped = [e.command for e in self.log.entries_from(index)]
+                self._emit(
+                    f"log conflict at index {index} (term {existing} vs {entry.term})"
+                    f" -> truncated, discarded {', '.join(dropped)}"
+                )
+                assert index > self.commit_index, "R5 must never truncate committed entries"
+                self.log.truncate_from(index)
+            self.log.append(entry)
+        return prev_log_index + len(entries)
+
+    def _follow_leader_commit(self, leader_commit: int, last_new_index: int) -> None:
+        """R7: ``commit_index = min(leader_commit, last_new_index)``.
+
+        Capped at last_new_index because only entries up to there are known
+        to match the leader; anything after might be a stale suffix. Never
+        moves backwards (a reordered old message can carry a smaller value).
+        """
+        target = min(leader_commit, last_new_index)
+        if target > self.commit_index:
+            self.commit_index = target
+            self._apply_committed()
 
     # --- state machine -----------------------------------------------------
 
